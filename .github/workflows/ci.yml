@@ -36,6 +36,7 @@ jobs:
   notify-deploy:
     name: Notify Deploy Workflow
     runs-on: ubuntu-latest
+    needs: build-frontend
     
     # 2. Trigger the Deploy repo via Repository Dispatch (Use a PAT for Deploy Repo Access)
     steps:
