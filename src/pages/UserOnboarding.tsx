@@ -44,6 +44,10 @@ import {
     CommandList,
 } from "@/components/ui/command"
 import { PEOPLEPORTAL_SERVER_ENDPOINT } from '@/commons/config'
+import zxcvbn from 'zxcvbn'
+import { Progress } from '@/components/ui/progress'
+import Cropper, { type Area, type Point } from 'react-easy-crop'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 interface CompleteSetupStageProps {
     stages: { name: string, status: boolean }[],
@@ -368,6 +372,13 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
     const [majors, setMajors] = React.useState<UMDApiMajorListResponse[]>([])
     const [expectedGraduation, setExpectedGraduation] = React.useState(props.defaultData?.expectedGrad ?? "")
 
+    // Cropping State
+    const [cropImage, setCropImage] = React.useState<string | null>(null)
+    const [crop, setCrop] = React.useState<Point>({ x: 0, y: 0 })
+    const [zoom, setZoom] = React.useState(1)
+    const [croppedAreaPixels, setCroppedAreaPixels] = React.useState<Area | null>(null)
+    const [isCroppingOpen, setIsCroppingOpen] = React.useState(false)
+
     React.useEffect(() => {
         return () => {
             if (preview) {
@@ -387,54 +398,47 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
             })
     }, [])
 
-    const resizeImage = (file: File): Promise<File> => {
+    const getCroppedImg = (imageSrc: string, pixelCrop: Area): Promise<Blob> => {
         return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = (event) => {
-                const img = new Image();
-                img.src = event.target?.result as string;
-                img.onload = () => {
-                    const canvas = document.createElement('canvas');
-                    let width = img.width;
-                    let height = img.height;
-                    const MAX_WIDTH = 500;
-                    const MAX_HEIGHT = 500;
+            const image = new Image();
+            image.src = imageSrc;
+            image.onload = () => {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
 
-                    if (width > height) {
-                        if (width > MAX_WIDTH) {
-                            height *= MAX_WIDTH / width;
-                            width = MAX_WIDTH;
-                        }
-                    } else {
-                        if (height > MAX_HEIGHT) {
-                            width *= MAX_HEIGHT / height;
-                            height = MAX_HEIGHT;
-                        }
+                if (!ctx) {
+                    reject(new Error("No 2d context"));
+                    return;
+                }
+
+                // Set canvas size to the desired cropped size
+                canvas.width = pixelCrop.width;
+                canvas.height = pixelCrop.height;
+
+                ctx.drawImage(
+                    image,
+                    pixelCrop.x,
+                    pixelCrop.y,
+                    pixelCrop.width,
+                    pixelCrop.height,
+                    0,
+                    0,
+                    pixelCrop.width,
+                    pixelCrop.height
+                );
+
+                canvas.toBlob((blob) => {
+                    if (!blob) {
+                        reject(new Error("Canvas is empty"));
+                        return;
                     }
-
-                    canvas.width = width;
-                    canvas.height = height;
-                    const ctx = canvas.getContext('2d');
-                    ctx?.drawImage(img, 0, 0, width, height);
-
-                    canvas.toBlob((blob) => {
-                        if (!blob) {
-                            reject(new Error("Canvas to Blob failed"));
-                            return;
-                        }
-                        const newFile = new File([blob], file.name.replace(/\.[^/.]+$/, "") + ".webp", {
-                            type: "image/webp",
-                            lastModified: Date.now(),
-                        });
-                        resolve(newFile);
-                    }, 'image/webp', 0.8);
-                };
-                img.onerror = (error) => reject(error);
+                    resolve(blob);
+                }, 'image/webp', 0.8);
             };
-            reader.onerror = (error) => reject(error);
+            image.onerror = (error) => reject(error);
         });
     };
+
 
     const validateFileSignature = (file: File): Promise<boolean> => {
         return new Promise((resolve) => {
@@ -498,72 +502,74 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
                 return;
             }
 
-            // Client-side resizing
-            let uploadFile = file;
-            setIsUploading(true); // Start loader during processing
+            const reader = new FileReader();
+            reader.addEventListener('load', () => {
+                setCropImage(reader.result as string);
+                setIsCroppingOpen(true);
+            });
+            reader.readAsDataURL(file);
+        }
+    }
 
-            try {
-                // If it's not a GIF (which we don't want to resize to avoid losing animation), resize it
-                // We'll also skip resizing if it's already very small
-                if (file.type !== 'image/gif' && file.size > 200 * 1024) {
-                    toast.info("Optimizing image...", { duration: 2000 });
-                    try {
-                        uploadFile = await resizeImage(file);
-                    } catch (err) {
-                        console.error("Resize failed", err);
-                        // Fallback to original file if resize fails
-                    }
-                }
+    async function processAndUploadAvatar() {
+        if (!cropImage || !croppedAreaPixels) return;
 
-                const url = URL.createObjectURL(uploadFile);
-                if (preview) URL.revokeObjectURL(preview);
-                setPreview(url);
+        setIsUploading(true);
+        setIsCroppingOpen(false);
 
-                if (!props.onboardId) {
-                    toast.error("Missing Onboard ID");
-                    setIsUploading(false);
-                    return;
-                }
+        try {
+            const croppedBlob = await getCroppedImg(cropImage, croppedAreaPixels);
+            const uploadFile = new File([croppedBlob], "avatar.webp", { type: "image/webp" });
 
-                // Get Upload URL
-                const res = await fetch(`${PEOPLEPORTAL_SERVER_ENDPOINT}/api/org/people/avatar/upload-url?inviteId=${props.onboardId}&fileName=${encodeURIComponent(uploadFile.name)}&contentType=${encodeURIComponent(uploadFile.type)}`);
-                if (!res.ok) {
-                    const err = await res.json();
-                    throw new Error(err.message || "Failed to get upload URL");
-                }
-                const { uploadUrl, key, fields } = await res.json();
+            const url = URL.createObjectURL(uploadFile);
+            if (preview) URL.revokeObjectURL(preview);
+            setPreview(url);
 
-                // Upload to S3 using Presigned POST
-                const formData = new FormData();
-                Object.entries(fields).forEach(([k, v]) => {
-                    formData.append(k, v as string);
-                });
-                formData.append("file", uploadFile);
-
-                const uploadRes = await fetch(uploadUrl, {
-                    method: 'POST',
-                    body: formData,
-                });
-
-                if (!uploadRes.ok) {
-                    const errorText = await uploadRes.text();
-                    if (uploadRes.status === 403 && errorText.includes("EntityTooLarge")) {
-                        throw new Error("File is too large (S3 Limit Exceeded)");
-                    }
-                    throw new Error(`Failed to upload to S3: ${uploadRes.status} ${uploadRes.statusText}`);
-                }
-
-                await new Promise(r => setTimeout(r, 1000)); // Wait a bit for S3 consistency
-
-                setAvatarKey(key);
-                toast.success("Profile picture uploaded!");
-            } catch (e: any) {
-                console.error(e);
-                toast.error("Upload failed", { description: e.message || "Please try again later" });
-                setAvatarKey(undefined); // Clear key on error
-            } finally {
+            if (!props.onboardId) {
+                toast.error("Missing Onboard ID");
                 setIsUploading(false);
+                return;
             }
+
+            // Get Upload URL
+            const res = await fetch(`${PEOPLEPORTAL_SERVER_ENDPOINT}/api/org/people/avatar/upload-url?inviteId=${props.onboardId}&fileName=${encodeURIComponent(uploadFile.name)}&contentType=${encodeURIComponent(uploadFile.type)}`);
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.message || "Failed to get upload URL");
+            }
+            const { uploadUrl, key, fields } = await res.json();
+
+            // Upload to S3 using Presigned POST
+            const formData = new FormData();
+            Object.entries(fields).forEach(([k, v]) => {
+                formData.append(k, v as string);
+            });
+            formData.append("file", uploadFile);
+
+            const uploadRes = await fetch(uploadUrl, {
+                method: 'POST',
+                body: formData,
+            });
+
+            if (!uploadRes.ok) {
+                const errorText = await uploadRes.text();
+                if (uploadRes.status === 403 && errorText.includes("EntityTooLarge")) {
+                    throw new Error("File is too large (S3 Limit Exceeded)");
+                }
+                throw new Error(`Failed to upload to S3: ${uploadRes.status} ${uploadRes.statusText}`);
+            }
+
+            await new Promise(r => setTimeout(r, 1000)); // Wait a bit for S3 consistency
+
+            setAvatarKey(key);
+            toast.success("Profile picture uploaded!");
+        } catch (e: any) {
+            console.error(e);
+            toast.error("Upload failed", { description: e.message || "Please try again later" });
+            setAvatarKey(undefined); // Clear key on error
+        } finally {
+            setIsUploading(false);
+            setCropImage(null);
         }
     }
 
@@ -583,6 +589,31 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
                 className="hidden"
                 onChange={onFileChange}
             />
+
+            <Dialog open={isCroppingOpen} onOpenChange={setIsCroppingOpen}>
+                <DialogContent className="max-w-xl">
+                    <DialogHeader>
+                        <DialogTitle>Crop your Profile Picture</DialogTitle>
+                    </DialogHeader>
+                    <div className="relative h-[400px] w-full mt-4 bg-muted rounded-md overflow-hidden">
+                        {cropImage && (
+                            <Cropper
+                                image={cropImage}
+                                crop={crop}
+                                zoom={zoom}
+                                aspect={1}
+                                onCropChange={setCrop}
+                                onZoomChange={setZoom}
+                                onCropComplete={(_, pixels) => setCroppedAreaPixels(pixels)}
+                            />
+                        )}
+                    </div>
+                    <DialogFooter className="mt-4">
+                        <Button variant="outline" onClick={() => setIsCroppingOpen(false)}>Cancel</Button>
+                        <Button onClick={processAndUploadAvatar}>Crop & Upload</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             <div className={'grid gap-2 w-lg mt-5'}>
                 <Label>What's your Major?</Label>
@@ -770,6 +801,38 @@ const CreatePasswordStage = (props: CreatePasswordStageProps) => {
     const [password, setPassword] = React.useState(props.defaultPassword)
     const [confirmPassword, setConfirmPassword] = React.useState(props.defaultPassword)
 
+    const strengthResult = React.useMemo(() => zxcvbn(password), [password])
+    const strengthScore = strengthResult.score // 0-4
+    const strengthPercentage = (strengthScore + 1) * 20 // 20, 40, 60, 80, 100
+
+    const getStrengthColor = (score: number) => {
+        switch (score) {
+            case 0: return "bg-red-500"
+            case 1: return "bg-orange-500"
+            case 2: return "bg-yellow-500"
+            case 3: return "bg-blue-500"
+            case 4: return "bg-green-500"
+            default: return "bg-muted"
+        }
+    }
+
+    const getStrengthLabel = (score: number) => {
+        switch (score) {
+            case 0: return "Very Weak"
+            case 1: return "Weak"
+            case 2: return "Fair"
+            case 3: return "Strong"
+            case 4: return "Very Strong"
+            default: return ""
+        }
+    }
+
+    const passwordRequirements = [
+        { name: "Minimum 12 characters", status: password.length >= 12 },
+        { name: "Fair password strength", status: strengthScore >= 2 },
+        { name: "Passwords match", status: password === confirmPassword && password.length > 0 }
+    ]
+
     return (
         <div className='flex flex-col h-full w-full justify-center items-center p-12'>
             <CardTitle>Welcome to the {ORGANIZATION_NAME}!</CardTitle>
@@ -792,7 +855,7 @@ const CreatePasswordStage = (props: CreatePasswordStageProps) => {
                         id="password"
                         type='password'
                         value={password}
-                        placeholder='Minimum 8 characters'
+                        placeholder='Minimum 12 characters'
                         onChange={(e) => setPassword(e.target.value)}
                     />
                 </div>
@@ -807,11 +870,51 @@ const CreatePasswordStage = (props: CreatePasswordStageProps) => {
                         onChange={(e) => setConfirmPassword(e.target.value)}
                     />
                 </div>
+
+                {/* Password Strength and Requirements */}
+                <div className="w-lg space-y-4 mt-4 p-4 border rounded-lg bg-card text-card-foreground shadow-sm">
+                    <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium">Overall Strength</span>
+                            <span className={cn("text-xs font-bold", getStrengthColor(strengthScore).replace('bg-', 'text-'))}>
+                                {getStrengthLabel(strengthScore)}
+                            </span>
+                        </div>
+                        <Progress
+                            value={strengthPercentage}
+                            className="h-2"
+                            indicatorClassName={getStrengthColor(strengthScore)}
+                        />
+                    </div>
+
+                    <Table>
+                        <TableBody>
+                            {passwordRequirements.map((req, i) => (
+                                <TableRow key={i} className="border-none hover:bg-transparent">
+                                    <TableCell className="py-1 px-0">{req.name}</TableCell>
+                                    <TableCell className="py-1 px-0 text-right">
+                                        {req.status ? (
+                                            <span className='inline-flex gap-1 items-center text-green-500 text-xs font-medium'>
+                                                <CheckCircle2Icon size="14" /> Complete
+                                            </span>
+                                        ) : (
+                                            <span className='inline-flex gap-1 items-center text-red-400 text-xs font-medium'>
+                                                <XCircleIcon size="14" /> Incomplete
+                                            </span>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+
+
+                </div>
             </div>
 
             {/* Next Step Stuff */}
             <Button
-                disabled={password.length < 8 || password != confirmPassword} className='mt-6'
+                disabled={password.length < 12 || password != confirmPassword || strengthScore < 2} className='mt-8'
                 onClick={() => { props.stepComplete(password) }}
             >
                 Continue Account Setup
