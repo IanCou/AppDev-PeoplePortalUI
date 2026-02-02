@@ -2,7 +2,8 @@ name: Build UI and Notify Deploy Stage
 
 on:
   push:
-    branches: [main] # Trigger only when PRs are merged into main
+    # Trigger only when PRs are merged into master
+    branches: [master]
 
 jobs:
   build-frontend:
