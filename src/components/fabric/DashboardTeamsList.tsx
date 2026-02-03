@@ -348,7 +348,7 @@ const CreateNewTeamDialog = (props: CreateNewTeamDialogProps) => {
 
                         {/* Corporate Role Input */}
                         <div className={`grid gap-3 ${(teamType == "CORPORATE") ? "" : "hidden"}`}>
-                            <Label htmlFor="role-1">Requestor Role</Label>
+                            <Label htmlFor="role-1">Your Role</Label>
                             <Input placeholder="Ex. Team Lead, Director, etc." required value={teamRole} onChange={(e) => setTeamRole(e.target.value)} />
                         </div>
                     </div>

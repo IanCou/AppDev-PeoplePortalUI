@@ -48,6 +48,7 @@ import zxcvbn from 'zxcvbn'
 import { Progress } from '@/components/ui/progress'
 import Cropper, { type Area, type Point } from 'react-easy-crop'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import imageCompression from 'browser-image-compression';
 import { Slider } from '@/components/ui/slider'
 
 interface CompleteSetupStageProps {
@@ -429,7 +430,7 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
                         return;
                     }
                     resolve(blob);
-                }, 'image/webp', 0.8);
+                }, 'image/webp', 1.0);
             };
             image.onerror = (error) => reject(error);
         });
@@ -477,6 +478,7 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
     };
 
     async function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+
         const file = e.target.files?.[0];
         if (file) {
             const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
@@ -493,15 +495,25 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
             }
 
             // Upfront File Size Check (Security: Prevent browser crash/hang during resize)
-            if (file.size > 5 * 1024 * 1024) {
-                toast.error("File is too large!", { description: "Maximum file size is 5MB" });
+            if (file.size > 20 * 1024 * 1024) {
+                toast.error("File is too large!", { description: "Maximum file size is 20MB" });
                 return;
             }
+
+            // Reset Cropping State for New Image
+            setCrop({ x: 0, y: 0 });
+            setZoom(1);
+            setCroppedAreaPixels(null);
 
             const reader = new FileReader();
             reader.addEventListener('load', () => {
                 setCropImage(reader.result as string);
                 setIsCroppingOpen(true);
+
+                // Reset Input to allow re-selecting same file
+                if (fileUploadRef.current) {
+                    fileUploadRef.current.value = "";
+                }
             });
             reader.readAsDataURL(file);
         }
@@ -510,12 +522,24 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
     async function processAndUploadAvatar() {
         if (!cropImage || !croppedAreaPixels) return;
 
+        toast.info("Processing image...");
         setIsUploading(true);
         setIsCroppingOpen(false);
 
         try {
             const croppedBlob = await getCroppedImg(cropImage, croppedAreaPixels);
-            const uploadFile = new File([croppedBlob], "avatar.webp", { type: "image/webp" });
+
+            // Compress the image to max 500KB (with buffer)
+            const options = {
+                maxSizeMB: 0.45,
+                maxWidthOrHeight: 512,
+                useWebWorker: true,
+                initialQuality: 0.8,
+                fileType: 'image/webp'
+            };
+
+            const compressedBlob = await imageCompression(new File([croppedBlob], "avatar.webp", { type: "image/webp" }), options);
+            const uploadFile = new File([compressedBlob], "avatar.webp", { type: "image/webp" });
 
             const url = URL.createObjectURL(uploadFile);
             if (preview) URL.revokeObjectURL(preview);
@@ -552,6 +576,9 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
                 if (uploadRes.status === 403 && errorText.includes("EntityTooLarge")) {
                     throw new Error("File is too large (S3 Limit Exceeded)");
                 }
+                if (uploadRes.status === 400) {
+                    throw new Error("Please try a different image.");
+                }
                 throw new Error(`Failed to upload to S3: ${uploadRes.status} ${uploadRes.statusText}`);
             }
 
@@ -573,7 +600,9 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
         <div className='flex flex-col h-full w-full items-center justify-center p-12'>
             <Avatar title='Upload Profile Picture' onClick={() => fileUploadRef.current?.click()} className="size-32 rounded-full cursor-pointer">
                 <AvatarImage src={preview ?? undefined} alt="Profile" />
-                <AvatarFallback><UploadCloudIcon className='size-8' /></AvatarFallback>
+                <AvatarFallback>
+                    {isUploading ? <Loader2Icon className='size-8 animate-spin' /> : <UploadCloudIcon className='size-8' />}
+                </AvatarFallback>
             </Avatar>
             <p className='mt-4 mb-2'>Upload your Profile Picture</p>
 
@@ -586,7 +615,12 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
                 onChange={onFileChange}
             />
 
-            <Dialog open={isCroppingOpen} onOpenChange={setIsCroppingOpen}>
+            <Dialog open={isCroppingOpen} onOpenChange={(open) => {
+                setIsCroppingOpen(open);
+                if (!open) {
+                    setCropImage(null);
+                }
+            }}>
                 <DialogContent className="max-w-xl">
                     <DialogHeader>
                         <DialogTitle>Crop your Profile Picture</DialogTitle>
