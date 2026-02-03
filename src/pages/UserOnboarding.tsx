@@ -23,7 +23,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ORGANIZATION_NAME } from '@/commons/strings'
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from '@/components/ui/sidebar'
-import { Check, CheckCircle2Icon, ChevronsUpDown, Loader2Icon, Lock, MessagesSquare, Signature, TriangleAlertIcon, UploadCloudIcon, User2Icon, XCircleIcon } from 'lucide-react'
+import { Check, CheckCircle2Icon, ChevronsUpDown, Loader2Icon, Lock, MessagesSquare, Minus, Plus, Signature, TriangleAlertIcon, UploadCloudIcon, User2Icon, XCircleIcon } from 'lucide-react'
 import React from 'react'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -44,6 +44,11 @@ import {
     CommandList,
 } from "@/components/ui/command"
 import { PEOPLEPORTAL_SERVER_ENDPOINT } from '@/commons/config'
+import zxcvbn from 'zxcvbn'
+import { Progress } from '@/components/ui/progress'
+import Cropper, { type Area, type Point } from 'react-easy-crop'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Slider } from '@/components/ui/slider'
 
 interface CompleteSetupStageProps {
     stages: { name: string, status: boolean }[],
@@ -53,7 +58,7 @@ interface CompleteSetupStageProps {
 
 interface SlackJoinStageProps {
     email: string,
-    inviteUrl: string,
+    slackInviteLink: string,
     defaultVerified: boolean,
     stepComplete: (joined: boolean) => void
 }
@@ -73,6 +78,7 @@ interface ProprietaryInformationStageProps {
 }
 
 interface PersonalInfoData {
+    avatarKey?: string,
     profileUrl: string,
     major: UMDApiMajorListResponse,
     expectedGrad: string,
@@ -80,6 +86,7 @@ interface PersonalInfoData {
 }
 
 interface PersonalInfoStageProps {
+    onboardId?: string,
     defaultData: PersonalInfoData | undefined,
     stepComplete: (data: PersonalInfoData) => void
 }
@@ -99,6 +106,7 @@ interface APIInviteInfo {
     teamName: string;
     inviterPk: number;
     expiresAt: Date;
+    slackInviteLink: string;
 }
 
 export const UserOnboarding = () => {
@@ -168,7 +176,8 @@ export const UserOnboarding = () => {
                 password: createdPasswordRef.current,
                 major: personalInfoRef.current?.major.name,
                 expectedGrad: personalInfoRef.current?.expectedGrad,
-                phoneNumber: personalInfoRef.current?.phoneNumber
+                phoneNumber: personalInfoRef.current?.phoneNumber,
+                avatarKey: personalInfoRef.current?.avatarKey
             })
         }).then((res) => {
             toast.success("Onboarding Complete!", {
@@ -201,7 +210,7 @@ export const UserOnboarding = () => {
 
     const [slackJoinProps, setSlackJoinProps] = React.useState({
         email: "Loading",
-        inviteUrl: '#',
+        slackInviteLink: '#',
         stepComplete: handleSlackJoinComplete
     })
 
@@ -224,7 +233,8 @@ export const UserOnboarding = () => {
 
                 setSlackJoinProps((existingProps) => ({
                     ...existingProps,
-                    email: inviteData.inviteEmail
+                    email: inviteData.inviteEmail,
+                    slackInviteLink: inviteData.slackInviteLink
                 }))
             })
 
@@ -278,7 +288,7 @@ export const UserOnboarding = () => {
                             <Route path="/loginsetup" element={<CreatePasswordStage defaultPassword={createdPasswordRef.current} {...passwordStageProps} />} />
                             <Route path='/legal' element={<ProprietaryInformationStage defaultSigned={ipAgreementComplete.current} stepComplete={handleIPAgreementComplete} />} />
                             <Route path='/slack' element={<SlackJoinStage defaultVerified={slackJoinComplete.current} {...slackJoinProps} />} />
-                            <Route path='/identity' element={<PersonalInfoStage defaultData={personalInfoRef.current} {...personalInfoProps} />} />
+                            <Route path='/identity' element={<PersonalInfoStage onboardId={params.onboardId} defaultData={personalInfoRef.current} {...personalInfoProps} />} />
                             <Route path='/complete' element={
                                 <CompleteSetupStage
                                     isLoading={isLoading}
@@ -345,7 +355,7 @@ const CompleteSetupStage = (props: CompleteSetupStageProps) => {
                     disabled={!allStepsComplete || props.isLoading}
                     onClick={props.stepComplete}
                 >
-                    <Loader2Icon style={{ display: (props.isLoading) ? 'block' : 'none' }} className='animate-spin' />
+                    <Loader2Icon className={cn('animate-spin', !props.isLoading && 'hidden')} />
                     Finish Setup
                 </Button>
             </div>
@@ -355,13 +365,23 @@ const CompleteSetupStage = (props: CompleteSetupStageProps) => {
 
 const PersonalInfoStage = (props: PersonalInfoStageProps) => {
     const [preview, setPreview] = React.useState<string | null>(props.defaultData?.profileUrl ?? null);
+    const [avatarKey, setAvatarKey] = React.useState<string | undefined>(props.defaultData?.avatarKey);
     const fileUploadRef = React.useRef<HTMLInputElement>(null)
     const [phoneNumber, setPhoneNumber] = React.useState(props.defaultData?.phoneNumber ?? "")
     const [selectedMajor, setSelectedMajor] = React.useState<UMDApiMajorListResponse | undefined>(props.defaultData?.major)
+    const [isUploading, setIsUploading] = React.useState(false);
 
     const [majorListOpen, setMajorListOpen] = React.useState(false)
     const [majors, setMajors] = React.useState<UMDApiMajorListResponse[]>([])
     const [expectedGraduation, setExpectedGraduation] = React.useState(props.defaultData?.expectedGrad ?? "")
+
+    // Cropping State
+    const [cropImage, setCropImage] = React.useState<string | null>(null)
+    const [crop, setCrop] = React.useState<Point>({ x: 0, y: 0 })
+    const [zoom, setZoom] = React.useState(1)
+    const [croppedAreaPixels, setCroppedAreaPixels] = React.useState<Area | null>(null)
+    const [isCroppingOpen, setIsCroppingOpen] = React.useState(false)
+
 
     React.useEffect(() => {
         fetch("https://api.umd.io/v1/majors/list")
@@ -374,13 +394,178 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
             })
     }, [])
 
-    function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const getCroppedImg = (imageSrc: string, pixelCrop: Area): Promise<Blob> => {
+        return new Promise((resolve, reject) => {
+            const image = new Image();
+            image.src = imageSrc;
+            image.onload = () => {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+
+                if (!ctx) {
+                    reject(new Error("No 2d context"));
+                    return;
+                }
+
+                // Set canvas size to the desired cropped size
+                canvas.width = pixelCrop.width;
+                canvas.height = pixelCrop.height;
+
+                ctx.drawImage(
+                    image,
+                    pixelCrop.x,
+                    pixelCrop.y,
+                    pixelCrop.width,
+                    pixelCrop.height,
+                    0,
+                    0,
+                    pixelCrop.width,
+                    pixelCrop.height
+                );
+
+                canvas.toBlob((blob) => {
+                    if (!blob) {
+                        reject(new Error("Canvas is empty"));
+                        return;
+                    }
+                    resolve(blob);
+                }, 'image/webp', 0.8);
+            };
+            image.onerror = (error) => reject(error);
+        });
+    };
+
+
+    const validateFileSignature = (file: File): Promise<boolean> => {
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = (e) => {
+                if (!e.target?.result || typeof e.target.result === 'string') {
+                    resolve(false);
+                    return;
+                }
+
+                const arr = (new Uint8Array(e.target.result)).subarray(0, 4);
+                let header = "";
+                for (let i = 0; i < arr.length; i++) {
+                    header += arr[i].toString(16);
+                }
+
+                // Magic Numbers
+                // PNG: 89 50 4E 47
+                // JPEG: FF D8 FF
+                // GIF: 47 49 46 38
+                // WebP: 52 49 46 46 (RIFF) ... WEBP (handled loosely here by RIFF check but good enough for rough check)
+
+                // Check hex signature
+                let isValid = false;
+                switch (true) {
+                    case header.startsWith("89504e47"): // PNG
+                    case header.startsWith("ffd8ff"):   // JPEG
+                    case header.startsWith("47494638"): // GIF
+                    case header.startsWith("52494646"): // RIFF (WebP mostly)
+                        isValid = true;
+                        break;
+                    default:
+                        isValid = false;
+                        break;
+                }
+                resolve(isValid);
+            };
+            reader.readAsArrayBuffer(file.slice(0, 4)); // Read first 4 bytes
+        });
+    };
+
+    async function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
         const file = e.target.files?.[0];
         if (file) {
-            const url = URL.createObjectURL(file);
+            const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+            if (!allowedTypes.includes(file.type)) {
+                toast.error("Invalid file type", { description: "Please upload an image (JPEG, PNG, WEBP, GIF)" });
+                return;
+            }
+
+            // Security: Magic Number Validation
+            const isValidSignature = await validateFileSignature(file);
+            if (!isValidSignature) {
+                toast.error("Invalid file content", { description: "The file content does not match its extension." });
+                return;
+            }
+
+            // Upfront File Size Check (Security: Prevent browser crash/hang during resize)
+            if (file.size > 5 * 1024 * 1024) {
+                toast.error("File is too large!", { description: "Maximum file size is 5MB" });
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.addEventListener('load', () => {
+                setCropImage(reader.result as string);
+                setIsCroppingOpen(true);
+            });
+            reader.readAsDataURL(file);
+        }
+    }
+
+    async function processAndUploadAvatar() {
+        if (!cropImage || !croppedAreaPixels) return;
+
+        setIsUploading(true);
+        setIsCroppingOpen(false);
+
+        try {
+            const croppedBlob = await getCroppedImg(cropImage, croppedAreaPixels);
+            const uploadFile = new File([croppedBlob], "avatar.webp", { type: "image/webp" });
+
+            const url = URL.createObjectURL(uploadFile);
+            if (preview) URL.revokeObjectURL(preview);
             setPreview(url);
-            console.log(url)
-            // TODO: upload to server with fetch/FormData
+
+            if (!props.onboardId) {
+                toast.error("Missing Onboard ID");
+                setIsUploading(false);
+                return;
+            }
+
+            // Get Upload URL
+            const res = await fetch(`${PEOPLEPORTAL_SERVER_ENDPOINT}/api/org/people/avatar/upload-url?inviteId=${props.onboardId}&fileName=${encodeURIComponent(uploadFile.name)}&contentType=${encodeURIComponent(uploadFile.type)}`);
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.message || "Failed to get upload URL");
+            }
+            const { uploadUrl, key, fields } = await res.json();
+
+            // Upload to S3 using Presigned POST
+            const formData = new FormData();
+            Object.entries(fields).forEach(([k, v]) => {
+                formData.append(k, v as string);
+            });
+            formData.append("file", uploadFile);
+
+            const uploadRes = await fetch(uploadUrl, {
+                method: 'POST',
+                body: formData,
+            });
+
+            if (!uploadRes.ok) {
+                const errorText = await uploadRes.text();
+                if (uploadRes.status === 403 && errorText.includes("EntityTooLarge")) {
+                    throw new Error("File is too large (S3 Limit Exceeded)");
+                }
+                throw new Error(`Failed to upload to S3: ${uploadRes.status} ${uploadRes.statusText}`);
+            }
+
+            await new Promise(r => setTimeout(r, 1000)); // Wait a bit for S3 consistency
+
+            setAvatarKey(key);
+            toast.success("Profile picture uploaded!");
+        } catch (e: any) {
+            console.error(e);
+            toast.error("Upload failed", { description: e.message || "Please try again later" });
+            setAvatarKey(undefined); // Clear key on error
+        } finally {
+            setIsUploading(false);
+            setCropImage(null);
         }
     }
 
@@ -400,6 +585,49 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
                 className="hidden"
                 onChange={onFileChange}
             />
+
+            <Dialog open={isCroppingOpen} onOpenChange={setIsCroppingOpen}>
+                <DialogContent className="max-w-xl">
+                    <DialogHeader>
+                        <DialogTitle>Crop your Profile Picture</DialogTitle>
+                    </DialogHeader>
+                    <div className="relative h-[400px] w-full mt-4 bg-muted rounded-md overflow-hidden">
+                        {cropImage && (
+                            <Cropper
+                                image={cropImage}
+                                crop={crop}
+                                zoom={zoom}
+                                aspect={1}
+                                onCropChange={setCrop}
+                                onZoomChange={setZoom}
+                                onCropComplete={(_, pixels) => setCroppedAreaPixels(pixels)}
+                            />
+                        )}
+                    </div>
+                    <div className="flex items-center justify-center gap-4 mt-4 w-full">
+                        <Minus
+                            className="w-4 h-4 cursor-pointer hover:opacity-70"
+                            onClick={() => setZoom(Math.max(1, zoom - 0.1))}
+                        />
+                        <Slider
+                            value={[zoom]}
+                            min={1}
+                            max={3}
+                            step={0.1}
+                            onValueChange={(value) => setZoom(value[0])}
+                            className="w-[50%]"
+                        />
+                        <Plus
+                            className="w-4 h-4 cursor-pointer hover:opacity-70"
+                            onClick={() => setZoom(Math.min(3, zoom + 0.1))}
+                        />
+                    </div>
+                    <DialogFooter className="mt-4">
+                        <Button variant="outline" onClick={() => setIsCroppingOpen(false)}>Cancel</Button>
+                        <Button onClick={processAndUploadAvatar}>Crop & Upload</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             <div className={'grid gap-2 w-lg mt-5'}>
                 <Label>What's your Major?</Label>
@@ -471,14 +699,18 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
 
             <Button
                 className='mt-8'
-                disabled={!expectedGraduation || !selectedMajor || !phoneNumber || !preview}
+                disabled={!expectedGraduation || !selectedMajor || !phoneNumber || !preview || isUploading}
                 onClick={() => props.stepComplete({
                     profileUrl: preview!,
+                    avatarKey: avatarKey,
                     major: selectedMajor!,
                     expectedGrad: expectedGraduation,
                     phoneNumber: phoneNumber
                 })}
-            >Continue</Button>
+            >
+                <Loader2Icon className={cn('animate-spin mr-2', !isUploading && 'hidden')} />
+                Continue
+            </Button>
         </div>
     )
 }
@@ -529,7 +761,7 @@ const SlackJoinStage = (props: SlackJoinStageProps) => {
                     <AlertDescription>
                         <span>
                             Please join App Dev's Slack Channel by
-                            <a className='text-blue-500' href={props.inviteUrl}> clicking this link</a>.
+                            <a className='text-blue-500' href={props.slackInviteLink} target="_blank" rel="noopener noreferrer"> clicking this link</a>.
                             You need to use the email address <b>{props.email}</b> to create or login to slack.
                             This portal validates your slack membership status by verifing your email address.
                         </span>
@@ -537,7 +769,7 @@ const SlackJoinStage = (props: SlackJoinStageProps) => {
                 </Alert>
 
                 <Button onClick={verifyJoinStatus} disabled={isLoading}>
-                    <Loader2Icon style={{ display: (isLoading) ? 'block' : 'none' }} className='animate-spin' />
+                    <Loader2Icon className={cn('animate-spin mr-2', !isLoading && 'hidden')} />
                     Verify and Continue
                 </Button>
             </div>
@@ -556,7 +788,7 @@ const ProprietaryInformationStage = (props: ProprietaryInformationStageProps) =>
             <div className='flex flex-col items-center gap-4 mt-5 w-full flex-grow-1'>
                 <iframe
                     className='w-[100%] h-[100%] rounded-md'
-                    src='https://www.cte.iup.edu/cte/Resources/PDF_TestPage.pdf'
+                    src='/IntellectualPropertyAgreement.pdf'
                     style={{
                         border: 'none'
                     }}
@@ -582,6 +814,39 @@ const ProprietaryInformationStage = (props: ProprietaryInformationStageProps) =>
 const CreatePasswordStage = (props: CreatePasswordStageProps) => {
     const [password, setPassword] = React.useState(props.defaultPassword)
     const [confirmPassword, setConfirmPassword] = React.useState(props.defaultPassword)
+    const [isInputFocused, setIsInputFocused] = React.useState(false)
+
+    const strengthResult = React.useMemo(() => zxcvbn(password), [password])
+    const strengthScore = strengthResult.score
+    const strengthPercentage = (strengthScore + 1) * 20
+
+    const getStrengthColor = (score: number) => {
+        switch (score) {
+            case 0: return "bg-red-500"
+            case 1: return "bg-orange-500"
+            case 2: return "bg-yellow-500"
+            case 3: return "bg-blue-500"
+            case 4: return "bg-green-500"
+            default: return "bg-muted"
+        }
+    }
+
+    const getStrengthLabel = (score: number) => {
+        switch (score) {
+            case 0: return "Very Weak"
+            case 1: return "Weak"
+            case 2: return "Fair"
+            case 3: return "Strong"
+            case 4: return "Very Strong"
+            default: return ""
+        }
+    }
+
+    const passwordRequirements = [
+        { name: "Minimum 12 characters", status: password.length >= 12 },
+        { name: "Fair password strength", status: strengthScore >= 2 },
+        { name: "Passwords match", status: password === confirmPassword && password.length > 0 }
+    ]
 
     return (
         <div className='flex flex-col h-full w-full justify-center items-center p-12'>
@@ -601,13 +866,58 @@ const CreatePasswordStage = (props: CreatePasswordStageProps) => {
                 {/* Get Password! */}
                 <div className={'grid gap-2 w-lg mt-5'}>
                     <Label htmlFor="password">Create New Password</Label>
-                    <Input
-                        id="password"
-                        type='password'
-                        value={password}
-                        placeholder='Minimum 8 characters'
-                        onChange={(e) => setPassword(e.target.value)}
-                    />
+                    <Popover open={password.length > 0 && isInputFocused}>
+                        <PopoverTrigger asChild>
+                            <Input
+                                id="password"
+                                type='password'
+                                value={password}
+                                placeholder='Minimum 12 characters'
+                                onFocus={() => setIsInputFocused(true)}
+                                onBlur={() => setIsInputFocused(false)}
+                                onChange={(e) => setPassword(e.target.value)}
+                            />
+                        </PopoverTrigger>
+                        <PopoverContent
+                            className="w-80 p-3"
+                            align="start"
+                            side="bottom"
+                            sideOffset={10}
+                            onOpenAutoFocus={(e) => e.preventDefault()}
+                        >
+                            <div className="space-y-3">
+                                <div className="space-y-1">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-xs font-semibold">Password Strength</span>
+                                        <span className={cn("text-xs font-bold", getStrengthColor(strengthScore).replace('bg-', 'text-'))}>
+                                            {getStrengthLabel(strengthScore)}
+                                        </span>
+                                    </div>
+                                    <Progress
+                                        value={strengthPercentage}
+                                        className="h-1.5"
+                                        indicatorClassName={getStrengthColor(strengthScore)}
+                                    />
+                                </div>
+
+                                <div className="space-y-1">
+                                    <p className="text-xs font-medium text-muted-foreground mb-1.5">Requirements</p>
+                                    {passwordRequirements.filter(req => req.name !== "Passwords match").map((req, i) => (
+                                        <div key={i} className="flex items-center gap-2">
+                                            {req.status ? (
+                                                <CheckCircle2Icon className="h-3.5 w-3.5 text-green-500" />
+                                            ) : (
+                                                <div className="h-3.5 w-3.5 rounded-full border border-muted-foreground/30" />
+                                            )}
+                                            <span className={cn("text-xs", req.status ? "text-foreground" : "text-muted-foreground")}>
+                                                {req.name}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </PopoverContent>
+                    </Popover>
                 </div>
 
                 <div className={'grid gap-2 w-lg'}>
@@ -619,12 +929,27 @@ const CreatePasswordStage = (props: CreatePasswordStageProps) => {
                         placeholder='Confirm your Password'
                         onChange={(e) => setConfirmPassword(e.target.value)}
                     />
+                    {confirmPassword.length > 0 && (
+                        <div className="flex items-center gap-2 mt-1">
+                            {password === confirmPassword ? (
+                                <>
+                                    <CheckCircle2Icon className="h-3.5 w-3.5 text-green-500" />
+                                    <span className="text-xs text-green-600 font-medium">Passwords match</span>
+                                </>
+                            ) : (
+                                <>
+                                    <XCircleIcon className="h-3.5 w-3.5 text-red-500" />
+                                    <span className="text-xs text-red-500 font-medium">Passwords do not match</span>
+                                </>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
 
             {/* Next Step Stuff */}
             <Button
-                disabled={password.length < 8 || password != confirmPassword} className='mt-6'
+                disabled={password.length < 12 || password != confirmPassword || strengthScore < 2} className='mt-8'
                 onClick={() => { props.stepComplete(password) }}
             >
                 Continue Account Setup
