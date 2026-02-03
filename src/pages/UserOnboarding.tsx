@@ -493,15 +493,25 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
             }
 
             // Upfront File Size Check (Security: Prevent browser crash/hang during resize)
-            if (file.size > 5 * 1024 * 1024) {
-                toast.error("File is too large!", { description: "Maximum file size is 5MB" });
+            if (file.size > 20 * 1024 * 1024) {
+                toast.error("File is too large!", { description: "Maximum file size is 20MB" });
                 return;
             }
+
+            // Reset Cropping State for New Image
+            setCrop({ x: 0, y: 0 });
+            setZoom(1);
+            setCroppedAreaPixels(null);
 
             const reader = new FileReader();
             reader.addEventListener('load', () => {
                 setCropImage(reader.result as string);
                 setIsCroppingOpen(true);
+
+                // Reset Input to allow re-selecting same file
+                if (fileUploadRef.current) {
+                    fileUploadRef.current.value = "";
+                }
             });
             reader.readAsDataURL(file);
         }
@@ -586,7 +596,12 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
                 onChange={onFileChange}
             />
 
-            <Dialog open={isCroppingOpen} onOpenChange={setIsCroppingOpen}>
+            <Dialog open={isCroppingOpen} onOpenChange={(open) => {
+                setIsCroppingOpen(open);
+                if (!open) {
+                    setCropImage(null);
+                }
+            }}>
                 <DialogContent className="max-w-xl">
                     <DialogHeader>
                         <DialogTitle>Crop your Profile Picture</DialogTitle>
