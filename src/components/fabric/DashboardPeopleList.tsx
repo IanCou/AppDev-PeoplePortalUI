@@ -125,7 +125,14 @@ export const DashboardPeopleList = () => {
             accessorKey: 'email',
             header: "Contact",
             cell: ({ row }) => (
-                <div className="flex items-center font-mono text-xs text-muted-foreground">
+                <div
+                    className="flex items-center font-mono text-xs text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        navigator.clipboard.writeText(row.original.email);
+                        toast.success("Email Copied to Clipboard!");
+                    }}
+                >
                     <MailIcon className="mr-2 h-3.5 w-3.5" />
                     {row.original.email}
                 </div>
@@ -244,8 +251,8 @@ export const DashboardPeopleList = () => {
                 </Pagination>
             </div>
 
-            <div className={`flex-1 min-h-0 overflow-auto rounded-md border ${isLoading ? "opacity-50" : ""}`}>
-                <Table>
+            <div className={`flex-1 min-h-100 ${isLoading ? "opacity-50" : ""}`}>
+                <Table containerClassName="h-full rounded-md border">
                     <TableHeader>
                         {table.getHeaderGroups().map((headerGroup) => (
                             <TableRow key={headerGroup.id}>

@@ -445,7 +445,7 @@ const AddTeamMembersDialog = (props: { teamPk?: string, subteams: TeamInfo[], op
             (
                 currentTab === "existing"
                     ? !!selectedExistingMember
-                    : !!inviteEmailAddress.trim() && !!inviteeName.trim()
+                    : !!inviteEmailAddress.trim() && inviteeName.split(" ").filter(Boolean).length > 1
             ))
     }, [
         selectedSubTeam, selectedExistingMember,

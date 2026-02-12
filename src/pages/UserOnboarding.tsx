@@ -665,24 +665,22 @@ const PersonalInfoStage = (props: PersonalInfoStageProps) => {
 
             <div className={'grid gap-2 w-lg mt-5'}>
                 <Label>What's your Major?</Label>
-                <Popover open={majorListOpen} onOpenChange={setMajorListOpen}>
+                <Popover open={majorListOpen} onOpenChange={setMajorListOpen} modal={true}>
                     <PopoverTrigger asChild>
                         <Button
                             variant="outline"
                             role="combobox"
                             aria-expanded={majorListOpen}
-                            className="justify-between max-w-full"
+                            className="w-full justify-between"
                         >
-                            {selectedMajor
-                                ? selectedMajor.name
-                                : "No Major Chosen"}
+                            {selectedMajor?.name || "Choose Major..."}
                             <ChevronsUpDown className="opacity-50" />
                         </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-[600px] max-w-[600px] p-0">
+                    <PopoverContent className="w-[600px] max-w-[600px] p-0" align="start">
                         <Command>
                             <CommandInput placeholder="Search UMD Major" className="h-9" />
-                            <CommandList>
+                            <CommandList className="max-h-[400px] overflow-y-auto" onWheel={(e) => e.stopPropagation()}>
                                 <CommandEmpty>No Majors Found</CommandEmpty>
                                 <CommandGroup>
                                     {majors.map((framework) => (

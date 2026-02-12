@@ -47,7 +47,8 @@ import {
 import type { CorpUserInfo } from "@/pages/CorpDashboard"
 
 export function SidebarUserInfo(props: {
-  userInfo: CorpUserInfo
+  userInfo: CorpUserInfo,
+  onLogout?: () => void
 }) {
   const { isMobile } = useSidebar()
   const getFallbackAvatar = () => {
@@ -109,7 +110,7 @@ export function SidebarUserInfo(props: {
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={props.onLogout}>
               <LogOut />
               Log out
             </DropdownMenuItem>

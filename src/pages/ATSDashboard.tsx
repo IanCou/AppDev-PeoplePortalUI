@@ -69,6 +69,7 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { validateFullName } from '@/lib/validation';
 
 // Type for subteam preference (internal mapping)
 
@@ -1515,7 +1516,7 @@ const AccountLoginAndVerifyDialog = ({ onSuccess, fullName: parentFullName, open
                         onClick={handleLogin}
                         className='mt-4'
                         disabled={isLoading || !((schoolEmail.endsWith("@umd.edu") || schoolEmail.endsWith("@terpmail.umd.edu")) &&
-                            fullName.split(" ").length > 1)}>
+                            fullName.split(" ").filter(Boolean).length > 1)}>
                         <Loader2Icon className={`animate-spin ${(!isLoading) ? "hidden" : ""}`} />
                         Continue</Button>
                 </div>

@@ -171,8 +171,8 @@ export const DashboardTeamsList = () => {
                 <Button onClick={() => { setCreateNewTeamDialogOpen((open) => !open) }}><PlusIcon /> Create New Team</Button>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-auto rounded-md border">
-                <Table>
+            <div className="flex-1 min-h-100">
+                <Table containerClassName="h-full rounded-md border">
                     <TableHeader>
                         {table.getHeaderGroups().map((headerGroup) => (
                             <TableRow key={headerGroup.id}>

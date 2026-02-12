@@ -23,6 +23,7 @@ import { flexRender, getCoreRowModel, getFilteredRowModel, useReactTable, type C
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { useNavigate } from "react-router-dom";
 import { Input } from "../ui/input";
+import { toast } from "sonner";
 import { Pagination, PaginationContent, PaginationItem, PaginationPrevious, PaginationLink, PaginationEllipsis, PaginationNext } from "../ui/pagination";
 import { MailIcon, Trash2Icon, User2Icon } from "lucide-react";
 
@@ -249,7 +250,15 @@ export const UserInformationTable: React.FC<UserTableProps> = ({
                                                             case "email": {
                                                                 const email = cell.getValue() as string;
                                                                 return (
-                                                                    <div className="truncate" title={email}>
+                                                                    <div
+                                                                        className="truncate cursor-pointer hover:text-foreground transition-colors"
+                                                                        title="Click to Copy Email"
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            navigator.clipboard.writeText(email);
+                                                                            toast.success("Email Copied to Clipboard!");
+                                                                        }}
+                                                                    >
                                                                         {email}
                                                                     </div>
                                                                 )

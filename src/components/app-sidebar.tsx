@@ -121,7 +121,7 @@ const data = {
     ],
 }
 
-export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar> & { userInfo: CorpUserInfo }) {
+export function AppSidebar({ onLogout, ...props }: React.ComponentProps<typeof Sidebar> & { userInfo: CorpUserInfo, onLogout?: () => void }) {
     return (
         <Sidebar variant="inset" {...props}>
             <SidebarHeader>
@@ -146,10 +146,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar> & 
             </SidebarContent>
             <SidebarFooter>
                 <NavUser user={{
+                    pk: props.userInfo.pk,
                     name: props.userInfo.name,
                     email: props.userInfo.email,
                     avatar: props.userInfo.avatar
-                }} />
+                }} onLogout={onLogout} />
             </SidebarFooter>
         </Sidebar>
     )

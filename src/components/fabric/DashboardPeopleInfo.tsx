@@ -16,16 +16,28 @@
   along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { useEffect, useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+// ... (rest of imports are fine as they were added in previous step)
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Mail, Phone, Calendar, GraduationCap, Briefcase, ShieldCheck, MapPin, Clock, Tag, AlertCircle, Users } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
+import { PhoneInput } from '@/components/ui/phone-input';
+import { Slider } from '@/components/ui/slider';
+import Cropper, { type Area, type Point } from 'react-easy-crop';
+import imageCompression from 'browser-image-compression';
 import { PEOPLEPORTAL_SERVER_ENDPOINT } from '@/commons/config';
 import { format, formatDistanceToNow } from 'date-fns';
 import { cn } from '@/lib/utils';
+import { toast } from "sonner";
+import { Loader2, Mail, Phone, Calendar, GraduationCap, Briefcase, ShieldCheck, MapPin, Clock, Tag, AlertCircle, Users, UserCog, Minus, Plus, UploadCloud, Check, ChevronsUpDown } from 'lucide-react';
 
 // --- Interfaces matching the Backend ---
 
@@ -58,11 +70,92 @@ interface TeamAttributeDefinition {
 
 interface UserAttributeDefinition {
     major: string;
-    expectedGrad: string;
+    expectedGrad: string | Date;
     phoneNumber: string;
     roles: { [key: string]: string };
     alumniAccount: boolean;
+    avatar?: string;
 }
+
+interface UMDApiMajorListResponse {
+    college: string,
+    major_id: string,
+    name: string,
+    url: string
+}
+
+const getCroppedImg = (imageSrc: string, pixelCrop: Area): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.src = imageSrc;
+        image.onload = () => {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+
+            if (!ctx) {
+                reject(new Error("No 2d context"));
+                return;
+            }
+
+            canvas.width = pixelCrop.width;
+            canvas.height = pixelCrop.height;
+
+            ctx.drawImage(
+                image,
+                pixelCrop.x,
+                pixelCrop.y,
+                pixelCrop.width,
+                pixelCrop.height,
+                0,
+                0,
+                pixelCrop.width,
+                pixelCrop.height
+            );
+
+            canvas.toBlob((blob) => {
+                if (!blob) {
+                    reject(new Error("Canvas is empty"));
+                    return;
+                }
+                resolve(blob);
+            }, 'image/webp', 1.0);
+        };
+        image.onerror = (error) => reject(error);
+    });
+};
+
+const validateFileSignature = (file: File): Promise<boolean> => {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = (e) => {
+            if (!e.target?.result || typeof e.target.result === 'string') {
+                resolve(false);
+                return;
+            }
+
+            const arr = (new Uint8Array(e.target.result)).subarray(0, 4);
+            let header = "";
+            for (let i = 0; i < arr.length; i++) {
+                header += arr[i].toString(16);
+            }
+
+            let isValid = false;
+            switch (true) {
+                case header.startsWith("89504e47"): // PNG
+                case header.startsWith("ffd8ff"):   // JPEG
+                case header.startsWith("47494638"): // GIF
+                case header.startsWith("52494646"): // RIFF (WebP)
+                    isValid = true;
+                    break;
+                default:
+                    isValid = false;
+                    break;
+            }
+            resolve(isValid);
+        };
+        reader.readAsArrayBuffer(file.slice(0, 4));
+    });
+};
 
 interface UserInformationBrief {
     pk: string;
@@ -119,12 +212,282 @@ const InfoItem = ({ icon: Icon, label, value, href, className }: { icon: React.E
     </div>
 );
 
-export const DashboardPeopleInfo = () => {
+const EditProfileModal = ({
+    isOpen,
+    onClose,
+    user,
+    onSuccess
+}: {
+    isOpen: boolean,
+    onClose: () => void,
+    user: UserInformationDetail,
+    onSuccess: (updatedUser: UserInformationDetail) => void
+}) => {
+    const [phoneNumber, setPhoneNumber] = useState(user.attributes.phoneNumber ?? "");
+    const [expectedGrad, setExpectedGrad] = useState(user.attributes.expectedGrad ? format(new Date(user.attributes.expectedGrad), 'yyyy-MM-dd') : "");
+    const [selectedMajor, setSelectedMajor] = useState<UMDApiMajorListResponse | null>(null);
+    const [majors, setMajors] = useState<UMDApiMajorListResponse[]>([]);
+    const [majorListOpen, setMajorListOpen] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+
+    // Avatar state
+    const [preview, setPreview] = useState<string | null>(user.avatar);
+    const [avatarKey, setAvatarKey] = useState<string | undefined>(user.attributes.avatar);
+    const [isUploading, setIsUploading] = useState(false);
+    const fileUploadRef = useRef<HTMLInputElement>(null);
+
+    // Cropping state
+    const [cropImage, setCropImage] = useState<string | null>(null);
+    const [crop, setCrop] = useState<Point>({ x: 0, y: 0 });
+    const [zoom, setZoom] = useState(1);
+    const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
+    const [isCroppingOpen, setIsCroppingOpen] = useState(false);
+
+    useEffect(() => {
+        fetch("https://api.umd.io/v1/majors/list")
+            .then(res => res.json())
+            .then(data => {
+                setMajors(data);
+                const currentMajor = data.find((m: any) => m.name === user.attributes.major);
+                if (currentMajor) setSelectedMajor(currentMajor);
+            })
+            .catch(() => toast.error("Failed to fetch majors"));
+    }, [user.attributes.major]);
+
+    async function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+        const file = e.target.files?.[0];
+        if (file) {
+            const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+            if (!allowedTypes.includes(file.type)) {
+                toast.error("Invalid file type", { description: "Please upload an image (JPEG, PNG, WEBP, GIF)" });
+                return;
+            }
+
+            const isValidSignature = await validateFileSignature(file);
+            if (!isValidSignature) {
+                toast.error("Invalid file content", { description: "The file content does not match its extension." });
+                return;
+            }
+
+            if (file.size > 20 * 1024 * 1024) {
+                toast.error("File is too large!", { description: "Maximum file size is 20MB" });
+                return;
+            }
+
+            setCrop({ x: 0, y: 0 });
+            setZoom(1);
+            setCroppedAreaPixels(null);
+
+            const reader = new FileReader();
+            reader.addEventListener('load', () => {
+                setCropImage(reader.result as string);
+                setIsCroppingOpen(true);
+                if (fileUploadRef.current) fileUploadRef.current.value = "";
+            });
+            reader.readAsDataURL(file);
+        }
+    }
+
+    async function processAndUploadAvatar() {
+        if (!cropImage || !croppedAreaPixels) return;
+        toast.info("Processing image...");
+        setIsUploading(true);
+        setIsCroppingOpen(false);
+
+        try {
+            const croppedBlob = await getCroppedImg(cropImage, croppedAreaPixels);
+            const options = {
+                maxSizeMB: 0.45,
+                maxWidthOrHeight: 512,
+                useWebWorker: true,
+                initialQuality: 0.8,
+                fileType: 'image/webp'
+            };
+
+            const compressedBlob = await imageCompression(new File([croppedBlob], "avatar.webp", { type: "image/webp" }), options);
+            const uploadFile = new File([compressedBlob], "avatar.webp", { type: "image/webp" });
+
+            const url = URL.createObjectURL(uploadFile);
+            setPreview(url);
+
+            const res = await fetch(`${PEOPLEPORTAL_SERVER_ENDPOINT}/api/org/people/avatar/self/upload-url?fileName=${encodeURIComponent(uploadFile.name)}&contentType=${encodeURIComponent(uploadFile.type)}`);
+            if (!res.ok) throw new Error("Failed to get upload URL");
+
+            const { uploadUrl, key, fields } = await res.json();
+            const formData = new FormData();
+            Object.entries(fields).forEach(([k, v]) => formData.append(k, v as string));
+            formData.append("file", uploadFile);
+
+            const uploadRes = await fetch(uploadUrl, { method: 'POST', body: formData });
+            if (!uploadRes.ok) throw new Error("Failed to upload to S3");
+
+            setAvatarKey(key);
+            toast.success("Profile picture updated!");
+        } catch (e: any) {
+            toast.error("Upload failed", { description: e.message });
+        } finally {
+            setIsUploading(false);
+            setCropImage(null);
+        }
+    }
+
+    const handleSave = async () => {
+        setIsSaving(true);
+        try {
+            const res = await fetch(`${PEOPLEPORTAL_SERVER_ENDPOINT}/api/org/people/${user.pk}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    major: selectedMajor?.name,
+                    phoneNumber,
+                    expectedGrad: expectedGrad ? new Date(expectedGrad) : undefined,
+                    avatar: avatarKey
+                })
+            });
+
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.message || "Failed to update profile");
+            }
+
+            toast.success("Profile updated successfully!");
+            onSuccess({
+                ...user,
+                avatar: preview || user.avatar,
+                attributes: {
+                    ...user.attributes,
+                    major: selectedMajor?.name || user.attributes.major,
+                    phoneNumber,
+                    expectedGrad: expectedGrad || user.attributes.expectedGrad,
+                    avatar: avatarKey || user.attributes.avatar
+                }
+            });
+            onClose();
+        } catch (e: any) {
+            toast.error("Save failed", { description: e.message });
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    return (
+        <Dialog open={isOpen} onOpenChange={onClose}>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                    <DialogTitle>Edit Profile</DialogTitle>
+                </DialogHeader>
+
+                <div className="flex flex-col items-center gap-6 py-4">
+                    <div className="relative group">
+                        <Avatar className="size-32 cursor-pointer transition-opacity group-hover:opacity-80" onClick={() => fileUploadRef.current?.click()}>
+                            <AvatarImage src={preview ?? undefined} />
+                            <AvatarFallback>
+                                {isUploading ? <Loader2 className="animate-spin" /> : <UploadCloud className="size-8" />}
+                            </AvatarFallback>
+                        </Avatar>
+                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
+                            <UploadCloud className="text-white drop-shadow-md" />
+                        </div>
+                        <input type="file" ref={fileUploadRef} className="hidden" accept="image/*" onChange={onFileChange} />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+                        <div className="space-y-2">
+                            <Label>Phone Number</Label>
+                            <PhoneInput value={phoneNumber} onChange={setPhoneNumber} defaultCountry="US" />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Major</Label>
+                            <Popover open={majorListOpen} onOpenChange={setMajorListOpen} modal={true}>
+                                <PopoverTrigger asChild>
+                                    <Button variant="outline" className="w-full justify-between overflow-hidden">
+                                        <span className="truncate text-left mr-2">
+                                            {selectedMajor?.name || "Select Major"}
+                                        </span>
+                                        <ChevronsUpDown className="size-4 opacity-50 shrink-0" />
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-[400px] p-0">
+                                    <Command>
+                                        <CommandInput placeholder="Search major..." />
+                                        <CommandList className="max-h-[300px] overflow-y-auto" onWheel={(e) => e.stopPropagation()}>
+                                            <CommandEmpty>No major found.</CommandEmpty>
+                                            <CommandGroup>
+                                                {majors.map(m => (
+                                                    <CommandItem
+                                                        key={m.major_id}
+                                                        onSelect={() => {
+                                                            setSelectedMajor(m);
+                                                            setMajorListOpen(false);
+                                                        }}
+                                                    >
+                                                        <div className="flex flex-col">
+                                                            <span>{m.name}</span>
+                                                            <span className="text-xs text-muted-foreground">{m.college}</span>
+                                                        </div>
+                                                        <Check className={cn("ml-auto size-4", selectedMajor?.major_id === m.major_id ? "opacity-100" : "opacity-0")} />
+                                                    </CommandItem>
+                                                ))}
+                                            </CommandGroup>
+                                        </CommandList>
+                                    </Command>
+                                </PopoverContent>
+                            </Popover>
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Expected Graduation</Label>
+                            <Input type="date" value={expectedGrad} onChange={e => setExpectedGrad(e.target.value)} />
+                        </div>
+                    </div>
+                </div>
+
+                <DialogFooter>
+                    <Button variant="outline" onClick={onClose} disabled={isSaving}>Cancel</Button>
+                    <Button onClick={handleSave} disabled={isSaving}>
+                        {isSaving && <Loader2 className="mr-2 size-4 animate-spin" />}
+                        Save Changes
+                    </Button>
+                </DialogFooter>
+
+                <Dialog open={isCroppingOpen} onOpenChange={setIsCroppingOpen}>
+                    <DialogContent className="max-w-xl">
+                        <DialogTitle>Crop Picture</DialogTitle>
+                        <div className="relative h-[400px] w-full mt-4 bg-muted rounded-md overflow-hidden">
+                            {cropImage && (
+                                <Cropper
+                                    image={cropImage}
+                                    crop={crop}
+                                    zoom={zoom}
+                                    aspect={1}
+                                    onCropChange={setCrop}
+                                    onZoomChange={setZoom}
+                                    onCropComplete={(_, pixels) => setCroppedAreaPixels(pixels)}
+                                />
+                            )}
+                        </div>
+                        <div className="flex items-center gap-4 mt-4">
+                            <Minus className="size-4 cursor-pointer" onClick={() => setZoom(z => Math.max(1, z - 0.1))} />
+                            <Slider value={[zoom]} min={1} max={3} step={0.1} onValueChange={v => setZoom(v[0])} className="flex-1" />
+                            <Plus className="size-4 cursor-pointer" onClick={() => setZoom(z => Math.min(3, z + 0.1))} />
+                        </div>
+                        <DialogFooter>
+                            <Button variant="outline" onClick={() => setIsCroppingOpen(false)}>Cancel</Button>
+                            <Button onClick={processAndUploadAvatar}>Crop & Upload</Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
+            </DialogContent>
+        </Dialog>
+    );
+};
+
+export const DashboardPeopleInfo = ({ loggedInUser }: { loggedInUser?: { pk: string } }) => {
     const { userPk } = useParams<{ userPk: string }>();
     const navigate = useNavigate();
     const [user, setUser] = useState<UserInformationDetail | null>(null);
     const [userTeamsMap, setUserTeamsMap] = useState<Map<string, TeamInformationBrief>>(new Map());
     const [loading, setLoading] = useState(true);
+    const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
     useEffect(() => {
         if (!userPk) return;
@@ -210,6 +573,29 @@ export const DashboardPeopleInfo = () => {
                             <p className="text-base text-muted-foreground font-mono break-all">{user.username}</p>
                         </div>
 
+                        {user && loggedInUser?.pk === user.pk && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="w-full mt-2 gap-2 border-primary/20 hover:bg-primary/5 hover:text-primary transition-all duration-200"
+                                onClick={() => {
+                                    setIsEditModalOpen(true);
+                                }}
+                            >
+                                <UserCog className="h-3.5 w-3.5" />
+                                <span className="text-xs font-semibold">Edit Profile</span>
+                            </Button>
+                        )}
+
+                        {user && (
+                            <EditProfileModal
+                                isOpen={isEditModalOpen}
+                                onClose={() => setIsEditModalOpen(false)}
+                                user={user}
+                                onSuccess={(updatedUser) => setUser(updatedUser)}
+                            />
+                        )}
+
                         <div className="flex flex-wrap justify-center md:justify-start gap-1.5 mt-1">
                             <Badge variant={user.active ? "default" : "destructive"} className={cn("px-2 py-0.5 text-xs", user.active ? "bg-emerald-600 hover:bg-emerald-700" : "")}>
                                 {user.active ? "Active" : "Inactive"}
@@ -231,19 +617,33 @@ export const DashboardPeopleInfo = () => {
 
                     {/* Contact Info Only - GitHub Style */}
                     <div className="flex flex-col gap-2 text-sm text-muted-foreground border-t pt-4">
-                        <div className="flex items-center gap-2">
+                        <div
+                            className="flex items-center gap-2 cursor-pointer hover:text-foreground transition-colors group"
+                            onClick={() => {
+                                navigator.clipboard.writeText(user.email);
+                                toast.success("Email Copied to Clipboard!");
+                            }}
+                            title="Click to Copy Email"
+                        >
                             <Mail className="h-4 w-4 shrink-0" />
-                            <a href={`mailto:${user.email}`} className="hover:text-primary hover:underline truncate transition-colors" title={user.email}>
+                            <span className="truncate group-hover:underline underline-offset-4">
                                 {user.email}
-                            </a>
+                            </span>
                         </div>
 
                         {attributes?.phoneNumber && (
-                            <div className="flex items-center gap-2">
+                            <div
+                                className="flex items-center gap-2 cursor-pointer hover:text-foreground transition-colors group"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(attributes.phoneNumber);
+                                    toast.success("Phone Number Copied to Clipboard!")
+                                }}
+                                title="Click to Copy Phone Number"
+                            >
                                 <Phone className="h-4 w-4 shrink-0" />
-                                <a href={`tel:${attributes.phoneNumber}`} className="hover:text-primary hover:underline truncate transition-colors" title={attributes.phoneNumber}>
+                                <span className="truncate group-hover:underline underline-offset-4">
                                     {attributes.phoneNumber}
-                                </a>
+                                </span>
                             </div>
                         )}
                     </div>

@@ -84,6 +84,7 @@ interface BreadcrumbItem {
 }
 
 export interface CorpUserInfo {
+    pk: string,
     name: string,
     avatar: string,
     email: string
@@ -94,6 +95,7 @@ export const CorpDashboard = () => {
     const navigate = useNavigate()
     const [breadcrumbs, setBreadcrumbs] = React.useState<BreadcrumbItem[]>([]);
     const [userInfo, setUserInfo] = React.useState<CorpUserInfo>({
+        pk: "unknown",
         name: "Unknown",
         email: "unknown@unknown.local",
         avatar: ""
@@ -121,6 +123,28 @@ export const CorpDashboard = () => {
         setBreadcrumbs(() => breadcrumbsList)
     }, [location]);
 
+    const handleLogout = async () => {
+        try {
+            const res = await fetch(`${PEOPLEPORTAL_SERVER_ENDPOINT}/api/auth/logout`, {
+                method: "POST",
+                credentials: "include"
+            })
+            if (res.ok) {
+                const data = await res.json()
+                toast.success("Logged out successfully")
+                if (data.logoutUrl) {
+                    window.location.href = data.logoutUrl
+                } else {
+                    window.location.href = `${PEOPLEPORTAL_SERVER_ENDPOINT}/api/auth/login`
+                }
+            } else {
+                toast.error("Failed to logout")
+            }
+        } catch (e) {
+            toast.error("Failed to logout")
+        }
+    }
+
     React.useEffect(() => {
         fetch(`${PEOPLEPORTAL_SERVER_ENDPOINT}/api/auth/userinfo`)
             .then(async (response) => {
@@ -144,7 +168,7 @@ export const CorpDashboard = () => {
 
     return (
         <SidebarProvider>
-            <AppSidebar userInfo={userInfo} />
+            <AppSidebar userInfo={userInfo} onLogout={handleLogout} />
             <SidebarInset>
                 <header className="flex h-16 shrink-0 items-center gap-2 px-6">
                     <SidebarTrigger className="-ml-1" />
@@ -181,7 +205,7 @@ export const CorpDashboard = () => {
                         <Route path="/" element={<Navigate to="/org/people" />} />
                         <Route path="/org" element={<Navigate to="/org/people" />} />
                         <Route path="/org/people" element={<DashboardPeopleList />} />
-                        <Route path="/org/people/:userPk" element={<DashboardPeopleInfo />} />
+                        <Route path="/org/people/:userPk" element={<DashboardPeopleInfo loggedInUser={userInfo} />} />
                         <Route path="/org/teams" element={<DashboardTeamsList />} />
                         <Route path="/org/teams/:teamId" element={<DashboardTeamInfo />} />
                         <Route path="/org/teams/:teamId/recruitment" element={<DashboardTeamRecruitment />} />
