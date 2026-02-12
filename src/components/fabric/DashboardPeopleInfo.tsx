@@ -619,9 +619,13 @@ export const DashboardPeopleInfo = ({ loggedInUser }: { loggedInUser?: { pk: str
                     <div className="flex flex-col gap-2 text-sm text-muted-foreground border-t pt-4">
                         <div
                             className="flex items-center gap-2 cursor-pointer hover:text-foreground transition-colors group"
-                            onClick={() => {
-                                navigator.clipboard.writeText(user.email);
-                                toast.success("Email Copied to Clipboard!");
+                            onClick={async () => {
+                                try {
+                                    await navigator.clipboard.writeText(user.email);
+                                    toast.success("Email Copied to Clipboard!");
+                                } catch (err) {
+                                    toast.error("Failed to copy email to clipboard");
+                                }
                             }}
                             title="Click to Copy Email"
                         >
@@ -634,9 +638,13 @@ export const DashboardPeopleInfo = ({ loggedInUser }: { loggedInUser?: { pk: str
                         {attributes?.phoneNumber && (
                             <div
                                 className="flex items-center gap-2 cursor-pointer hover:text-foreground transition-colors group"
-                                onClick={() => {
-                                    navigator.clipboard.writeText(attributes.phoneNumber);
-                                    toast.success("Phone Number Copied to Clipboard!")
+                                onClick={async () => {
+                                    try {
+                                        await navigator.clipboard.writeText(attributes.phoneNumber!);
+                                        toast.success("Phone Number Copied to Clipboard!")
+                                    } catch (err) {
+                                        toast.error("Failed to copy phone number to clipboard");
+                                    }
                                 }}
                                 title="Click to Copy Phone Number"
                             >

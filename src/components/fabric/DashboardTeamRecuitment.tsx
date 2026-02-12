@@ -803,10 +803,14 @@ export const DashboardTeamRecruitment = () => {
                                         variant="outline"
                                         size="sm"
                                         className="flex-1"
-                                        onClick={() => {
+                                        onClick={async () => {
                                             if (selectedApplicationDetails?.email) {
-                                                navigator.clipboard.writeText(selectedApplicationDetails.email);
-                                                toast.success("Email Copied to Clipboard!");
+                                                try {
+                                                    await navigator.clipboard.writeText(selectedApplicationDetails.email);
+                                                    toast.success("Email Copied to Clipboard!");
+                                                } catch (err) {
+                                                    toast.error("Failed to copy email to clipboard");
+                                                }
                                             }
                                         }}
                                         disabled={!selectedApplicationDetails?.email}
