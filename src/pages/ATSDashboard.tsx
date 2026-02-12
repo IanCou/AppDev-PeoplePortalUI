@@ -69,7 +69,6 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { validateFullName } from '@/lib/validation';
 
 // Type for subteam preference (internal mapping)
 
