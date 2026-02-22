@@ -159,9 +159,23 @@ export const DashboardTeamInfo = () => {
                 if (done)
                     break;
 
-                const update = JSON.parse(decoder.decode(value, { stream: true }));
-                setSyncDialogProgress(update.progressPercent)
-                setSyncDialogStatus(update.status)
+                /* Handle Newline Delimited JSON */
+                const textChunk = decoder.decode(value, { stream: true });
+                const updates: any[] = [];
+                textChunk.split("\n").forEach((part) => {
+                    if (part.trim()) {
+                        try {
+                            updates.push(JSON.parse(part));
+                        } catch (e) {
+                            console.error("Failed to parse partial chunk", part, e);
+                        }
+                    }
+                });
+
+                for (const update of updates) {
+                    setSyncDialogProgress(update.progressPercent)
+                    setSyncDialogStatus(update.status)
+                }
             }
 
             /* Sync Completed */
